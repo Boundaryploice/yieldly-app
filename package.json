@@ -1,0 +1,93 @@
+{
+  "name": "yieldlyx-standalone",
+  "version": "1.0.0",
+  "description": "YieldlyX — desktop crypto trading, local OpenTrader only (no remote backend)",
+  "main": "electron/main.mjs",
+  "author": "YCSLINT",
+  "type": "module",
+  "scripts": {
+    "setup": "node scripts/ensure-electron.mjs",
+    "prestart": "node scripts/ensure-electron.mjs",
+    "start": "electron .",
+    "kill:engine": "node scripts/kill-port-8000.mjs",
+    "prebuild": "node scripts/generate-opentrader-prisma.mjs && node scripts/generate-app-icon.mjs",
+    "icons": "node scripts/generate-app-icon.mjs",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac",
+    "build:linux": "electron-builder --linux",
+    "postinstall": "node scripts/ensure-electron.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "opentrader": "1.0.0-beta.29"
+  },
+  "devDependencies": {
+    "electron": "^34.2.0",
+    "electron-builder": "^25.1.8",
+    "sharp": "^0.34.5"
+  },
+  "build": {
+    "appId": "com.yieldlyx.desktop.standalone",
+    "productName": "YieldlyX",
+    "icon": "build/icon.png",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "renderer/**/*",
+      "scripts/**/*",
+      "node_modules/opentrader/**/*",
+      "node_modules/opentrader/node_modules/.prisma/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/opentrader/**"
+    ],
+    "extraResources": [],
+    "win": {
+      "target": "nsis",
+      "signAndEditExecutable": false
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.finance",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "minimumSystemVersion": "11.0"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Finance",
+      "maintainer": "YCSLINT",
+      "synopsis": "Crypto trading desktop app",
+      "description": "YieldlyX — OpenTrader bots and strategies on your desktop.",
+      "desktop": {
+        "Name": "YieldlyX",
+        "Comment": "Crypto trading desktop app",
+        "Categories": "Office;Finance;"
+      }
+    },
+    "deb": {
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6"
+      ]
+    },
+    "afterPack": "scripts/after-pack.mjs"
+  }
+}

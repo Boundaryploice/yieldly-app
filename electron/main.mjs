@@ -1,0 +1,305 @@
+import { existsSync } from "node:fs";
+import { app, BrowserWindow, ipcMain } from "electron";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  ensureOpentraderData,
+  freeOpentraderPort,
+  hasAdminPassword,
+  saveAdminPassword,
+  startOpentraderDaemon,
+  stopOpentraderDaemon,
+  waitForOpentraderServer,
+} from "./opentraderService.mjs";
+import { OPENTRADER_HOST, OPENTRADER_PORT } from "./paths.mjs";
+import { getOpentraderStartUrl } from "./opentraderApi.mjs";
+import { setupExchangeRouteGuard } from "./exchangeRouteGuard.mjs";
+import { setupTraderChrome } from "./traderChrome.mjs";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const APP_ICON = path.join(__dirname, "../build/icon.png");
+const APP_NAME = "YieldlyX";
+const OPENTRADER_ORIGIN = `http://${OPENTRADER_HOST}:${OPENTRADER_PORT}`;
+const MIN_PASSWORD_LENGTH = 6;
+
+/** @type {BrowserWindow | null} */
+let mainWindow = null;
+/** @type {boolean} */
+let showingTrader = false;
+
+/** @type {{ uiUrl: string } | null} */
+let startupState = null;
+/** @type {string | null} */
+let sessionAdminPassword = null;
+
+/** @type {(() => void) | null} */
+let passwordSetupResolve = null;
+
+/** @type {(() => void) | null} */
+let teardownTraderChrome = null;
+
+/** @type {(() => void) | null} */
+let teardownExchangeGuard = null;
+
+/** @type {boolean} */
+let splashReady = false;
+/** @type {unknown[]} */
+const pendingSplashEvents = [];
+
+function flushSplashEvents() {
+  if (!mainWindow || showingTrader) return;
+  for (const payload of pendingSplashEvents) {
+    mainWindow.webContents.send("desktop-event", payload);
+  }
+  pendingSplashEvents.length = 0;
+}
+
+function sendToSplash(payload) {
+  if (!mainWindow || showingTrader) return;
+  if (!splashReady) {
+    pendingSplashEvents.push(payload);
+    return;
+  }
+  mainWindow.webContents.send("desktop-event", payload);
+}
+
+function guardNavigation(win) {
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith(OPENTRADER_ORIGIN)) {
+      return { action: "allow" };
+    }
+    return { action: "deny" };
+  });
+
+  win.webContents.on("will-navigate", (event, url) => {
+    if (url.startsWith("file:") || url.startsWith(OPENTRADER_ORIGIN)) return;
+    event.preventDefault();
+  });
+}
+
+function createMainWindow({ setupMode = false } = {}) {
+  splashReady = false;
+  pendingSplashEvents.length = 0;
+
+  return new Promise((resolve) => {
+    mainWindow = new BrowserWindow({
+      width: 520,
+      height: setupMode ? 720 : 680,
+      minWidth: 420,
+      minHeight: 520,
+      frame: false,
+      resizable: true,
+      maximizable: true,
+      minimizable: true,
+      title: setupMode ? `Set password — ${APP_NAME}` : APP_NAME,
+      ...(existsSync(APP_ICON) ? { icon: APP_ICON } : {}),
+      backgroundColor: "#f4f6fb",
+      webPreferences: {
+        preload: path.join(__dirname, "preload.cjs"),
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    });
+
+    guardNavigation(mainWindow);
+
+    mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
+    mainWindow.webContents.once("did-finish-load", () => resolve(mainWindow));
+    mainWindow.on("closed", () => {
+      teardownTraderChrome?.();
+      teardownTraderChrome = null;
+      teardownExchangeGuard?.();
+      teardownExchangeGuard = null;
+      mainWindow = null;
+      showingTrader = false;
+    });
+  });
+}
+
+function waitForPasswordSetup() {
+  return new Promise((resolve) => {
+    passwordSetupResolve = resolve;
+  });
+}
+
+async function promptForAdminPassword() {
+  sendToSplash({ type: "setup-password" });
+  await waitForPasswordSetup();
+  sendToSplash({ type: "status", message: "Password saved. Starting trading engine…" });
+}
+
+function openOpentraderInApp() {
+  if (!mainWindow || !startupState?.uiUrl) return;
+
+  showingTrader = true;
+  teardownTraderChrome?.();
+  teardownExchangeGuard?.();
+  teardownTraderChrome = setupTraderChrome(
+    mainWindow.webContents,
+    OPENTRADER_ORIGIN,
+    () => sessionAdminPassword
+  );
+  teardownExchangeGuard = setupExchangeRouteGuard(
+    mainWindow.webContents,
+    OPENTRADER_ORIGIN,
+    () => sessionAdminPassword,
+    () => showingTrader
+  );
+
+  mainWindow.setMinimumSize(960, 640);
+  if (!mainWindow.isMaximized()) {
+    mainWindow.setSize(1280, 840);
+    mainWindow.center();
+  }
+  mainWindow.setTitle(APP_NAME);
+  mainWindow.loadURL(startupState.uiUrl);
+}
+
+async function bootstrap() {
+  sendToSplash({ type: "status", message: "Preparing your trading workspace…" });
+
+  const userData = app.getPath("userData");
+  const data = await ensureOpentraderData(userData, (message) => {
+    sendToSplash({ type: "status", message });
+  });
+
+  sendToSplash({ type: "status", message: "Freeing port 8000 if needed…" });
+  await freeOpentraderPort();
+
+  sendToSplash({ type: "status", message: "Starting trading engine…" });
+  await startOpentraderDaemon(userData);
+  await waitForOpentraderServer(90_000, (seconds) => {
+    sendToSplash({
+      type: "status",
+      message: `Connecting to markets (${seconds}s)…`,
+    });
+  });
+
+  const uiUrl = await getOpentraderStartUrl(data.adminPassword);
+  sessionAdminPassword = data.adminPassword;
+  startupState = { uiUrl };
+
+  const needsExchange = uiUrl.includes("/dashboard/accounts");
+  sendToSplash({
+    type: "ready",
+    uiUrl,
+    message: needsExchange
+      ? "Ready — connect an exchange account to begin (opening dashboard in 3s)."
+      : "Ready — opening your trading dashboard in 3 seconds…",
+  });
+
+  await new Promise((r) => setTimeout(r, 3000));
+
+  openOpentraderInApp();
+}
+
+async function runStartup() {
+  const userData = app.getPath("userData");
+  const firstRun = !hasAdminPassword(userData);
+
+  await createMainWindow({ setupMode: firstRun });
+
+  if (firstRun) {
+    await promptForAdminPassword();
+    mainWindow?.setTitle(APP_NAME);
+  }
+
+  await bootstrap();
+}
+
+ipcMain.on("splash-ready", () => {
+  splashReady = true;
+  flushSplashEvents();
+});
+
+ipcMain.handle("needs-password-setup", () => !hasAdminPassword(app.getPath("userData")));
+
+ipcMain.handle("save-admin-password", async (_evt, { password, confirm }) => {
+  const p = String(password ?? "").trim();
+  const c = String(confirm ?? "").trim();
+
+  if (p.length < MIN_PASSWORD_LENGTH) {
+    return {
+      ok: false,
+      error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`,
+    };
+  }
+  if (p !== c) {
+    return { ok: false, error: "Passwords do not match." };
+  }
+
+  saveAdminPassword(app.getPath("userData"), p);
+  passwordSetupResolve?.();
+  passwordSetupResolve = null;
+  return { ok: true };
+});
+
+ipcMain.handle("startup-state", () => startupState);
+ipcMain.handle("open-opentrader", () => {
+  openOpentraderInApp();
+  mainWindow?.focus();
+  return { ok: true };
+});
+
+ipcMain.handle("window-minimize", () => {
+  mainWindow?.minimize();
+});
+
+ipcMain.handle("window-maximize", () => {
+  if (!mainWindow) return false;
+  if (mainWindow.isMaximized()) mainWindow.unmaximize();
+  else mainWindow.maximize();
+  return mainWindow.isMaximized();
+});
+
+ipcMain.handle("window-close", () => {
+  mainWindow?.close();
+});
+
+ipcMain.handle("window-is-maximized", () => mainWindow?.isMaximized() ?? false);
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}
+
+app.whenReady().then(() => {
+  if (!gotSingleInstanceLock) return;
+
+  runStartup().catch((err) => {
+    console.error("[startup]", err);
+    sendToSplash({
+      type: "fatal",
+      message: err instanceof Error ? err.message : String(err),
+    });
+  });
+});
+
+app.on("window-all-closed", () => {
+  stopOpentraderDaemon();
+  if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", () => {
+  stopOpentraderDaemon();
+});
+
+app.on("activate", () => {
+  if (!mainWindow) {
+    runStartup().catch((err) => {
+      sendToSplash({
+        type: "fatal",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    });
+  } else {
+    mainWindow.focus();
+  }
+});
