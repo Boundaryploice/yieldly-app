@@ -10,7 +10,6 @@ Everything runs on your machine: password, SQLite DB, and dashboard at `http://1
 ## Install & run
 
 ```bash
-cd desktop-app-no-upload
 npm install
 npm run setup
 npm start
