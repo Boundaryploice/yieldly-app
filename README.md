@@ -89,10 +89,4 @@ powershell -ExecutionPolicy Bypass -File .\scripts\clean-install.ps1
 sh ./scripts/clean-install.sh
 ```
 
-## Comparison
 
-| Capability | Standard desktop app | YieldlyX Standalone |
-|--|--|--|
-| File upload flow | Yes | No |
-| Exchange credential upload to backend | Yes | No |
-| Local OpenTrader UI and engine | Yes | Yes |
