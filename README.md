@@ -3,10 +3,8 @@
 YieldlyX Standalone is an Electron desktop wrapper for OpenTrader that runs entirely on your local machine.
 It is designed for local operation without backend upload/sync flows.
 
-## Scope and Behavior
+## Scope and Behavior 
 
-- No `chalk-ycslint` integration.
-- No `file-receive-backend` sync path for credential upload.
 - OpenTrader engine runs at `http://127.0.0.1:8000`.
 - On first run, the app asks for an admin password, initializes a local SQLite database, then launches OpenTrader inside the desktop window.
 - If no exchange account is configured, the UI guides users to the Accounts screen before strategy/bot routes.
