@@ -1,15 +1,23 @@
 import { exec } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { delimiter, join } from "node:path";
 import { promisify } from "node:util";
 import { app } from "electron";
 import {
+  getOpentraderEnginePath,
   getOpentraderPackageRoot,
   getOpentraderPaths,
-  getOpentraderStandalonePath,
+  resolvePrismaClientIndex,
   OPENTRADER_HOST,
   OPENTRADER_PORT,
 } from "./paths.mjs";
+import { prismaClientBundled } from "./packagedChecks.mjs";
 import {
   getPrismaCliPath,
   runElectronAsNode,
@@ -69,40 +77,42 @@ async function runShellCommand(command, cwd, env) {
 }
 
 /**
- * Packaged builds omit dotfolders unless prebuild generates them; regenerate if missing.
+ * Packaged apps must include Prisma from `npm run prebuild` + after-pack (no runtime generate).
  * @param {string} pkgRoot
- * @param {NodeJS.ProcessEnv} env
- * @param {(message: string) => void} [onStatus]
  */
-async function ensurePackagedPrismaClient(pkgRoot, env, onStatus) {
+function assertPackagedPrismaBundled(pkgRoot) {
   if (!app.isPackaged) return;
-
-  const generated = join(pkgRoot, "node_modules", ".prisma", "client", "index.js");
-  if (existsSync(generated)) return;
-
-  onStatus?.("Preparing database engine (first packaged run)…");
-  const prismaCli = getPrismaCliPath(pkgRoot);
-  await runElectronAsNode(prismaCli, ["generate", "--generator", "client"], {
-    cwd: pkgRoot,
-    env,
-  });
+  if (prismaClientBundled(pkgRoot)) return;
+  throw new Error(
+    "Database engine is not bundled in this YieldlyX build.\n\n" +
+      "On a Mac, rebuild the installer:\n" +
+      "  npm install\n" +
+      "  npm run build:mac\n\n" +
+      "Then drag the new app from the DMG to Applications and open it from there."
+  );
 }
 
 /**
  * @param {string} pkgRoot
+ * @param {string} userDataPath
+ */
+function buildOpentraderNodePath(pkgRoot) {
+  return join(pkgRoot, "node_modules");
+}
+
+/**
+ * @param {string} pkgRoot
+ * @param {string} userDataPath
  * @param {NodeJS.ProcessEnv} env
  * @param {(message: string) => void} [onStatus]
  */
-async function initDatabase(pkgRoot, env, onStatus) {
+async function initDatabase(pkgRoot, userDataPath, env, onStatus) {
   const prismaCli = getPrismaCliPath(pkgRoot);
   const seedPath = join(pkgRoot, "seed.mjs");
 
   if (app.isPackaged) {
+    assertPackagedPrismaBundled(pkgRoot);
     onStatus?.("Creating database (first run, may take 1–2 min)…");
-    await runElectronAsNode(prismaCli, ["generate", "--generator", "client"], {
-      cwd: pkgRoot,
-      env,
-    });
     onStatus?.("Running database migrations…");
     await runElectronAsNode(prismaCli, ["migrate", "deploy"], {
       cwd: pkgRoot,
@@ -142,10 +152,12 @@ export async function ensureOpentraderData(userDataPath, onStatus) {
 
   const env = { ...process.env, DATABASE_URL: toDatabaseUrl(paths.dbFilePath) };
 
-  await ensurePackagedPrismaClient(pkgRoot, env, onStatus);
+  if (app.isPackaged) {
+    assertPackagedPrismaBundled(pkgRoot);
+  }
 
   if (!existsSync(paths.dbFilePath)) {
-    await initDatabase(pkgRoot, env, onStatus);
+    await initDatabase(pkgRoot, userDataPath, env, onStatus);
   }
 
   return {
@@ -170,7 +182,8 @@ export async function startOpentraderDaemon(userDataPath) {
   const pkgRoot = getOpentraderPackageRoot();
   const paths = getOpentraderPaths(userDataPath);
   const adminPassword = readFileSync(paths.passFilePath, "utf8").trim();
-  const standalonePath = getOpentraderStandalonePath(pkgRoot);
+  const enginePath = getOpentraderEnginePath();
+  const prismaClientIndex = resolvePrismaClientIndex(pkgRoot);
 
   const daemonEnv = {
     HOST: OPENTRADER_HOST,
@@ -178,21 +191,32 @@ export async function startOpentraderDaemon(userDataPath) {
     DATABASE_URL: toDatabaseUrl(paths.dbFilePath),
     ADMIN_PASSWORD: adminPassword,
     CUSTOM_STRATEGIES_PATH: paths.strategiesPath,
+    YIELDLYX_OPENTRADER_ROOT: pkgRoot,
+    YIELDLYX_PRISMA_CLIENT: prismaClientIndex,
   };
 
   lastDaemonLog = "";
 
-  daemonProcess = spawnElectronAsNode(standalonePath, [], {
+  daemonProcess = spawnElectronAsNode(enginePath, [], {
     cwd: pkgRoot,
     env: {
       ...daemonEnv,
-      NODE_PATH: join(pkgRoot, "node_modules"),
+      NODE_PATH: buildOpentraderNodePath(pkgRoot),
     },
   });
 
+  const logFile = join(paths.dataDir, "engine.log");
   const appendLog = (chunk) => {
-    lastDaemonLog = `${lastDaemonLog}${chunk.toString()}`.slice(-4000);
-    console.error("[opentrader]", chunk.toString());
+    const text = chunk.toString();
+    lastDaemonLog = `${lastDaemonLog}${text}`.slice(-4000);
+    console.error("[opentrader]", text);
+    if (app.isPackaged) {
+      try {
+        appendFileSync(logFile, text);
+      } catch {
+        /* ignore */
+      }
+    }
   };
 
   daemonProcess.stdout?.on("data", appendLog);
@@ -265,7 +289,11 @@ export async function waitForOpentraderServer(timeoutMs = 90_000, onWait) {
     await new Promise((r) => setTimeout(r, 500));
   }
 
+  const logHint =
+    app.isPackaged && lastUserDataPath
+      ? `\nLog: ${join(getOpentraderPaths(lastUserDataPath).dataDir, "engine.log")}`
+      : "";
   throw new Error(
-    `OpenTrader did not start within ${timeoutMs / 1000}s.\n${getLastDaemonLog().slice(-500)}`
+    `OpenTrader did not start within ${timeoutMs / 1000}s.\n${getLastDaemonLog().slice(-500)}${logHint}`
   );
 }

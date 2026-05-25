@@ -1,2 +1,4 @@
 node_modules/
 dist/
+build/prisma-client-dist/
+electron/prisma-client-dist/

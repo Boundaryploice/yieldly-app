@@ -1,37 +1,44 @@
 {
-  "name": "yieldlyx-standalone",
+  "name": "yieldlyx",
   "version": "1.0.0",
-  "description": "YieldlyX — desktop crypto trading, local OpenTrader only (no remote backend)",
+  "description": "YieldlyX — desktop crypto trading powered by OpenTrader (Windows, macOS, Linux)",
   "main": "electron/main.mjs",
   "author": "YCSLINT",
   "type": "module",
   "scripts": {
     "setup": "node scripts/ensure-electron.mjs",
-    "prestart": "node scripts/ensure-electron.mjs",
+    "prestart": "node scripts/ensure-electron.mjs && node scripts/stage-prisma-client.mjs && node scripts/patch-opentrader-prisma-cjs.mjs",
     "start": "electron .",
+    "start:local": "node scripts/start-local.mjs",
+    "prestart:local": "node scripts/ensure-electron.mjs",
     "kill:engine": "node scripts/kill-port-8000.mjs",
+    "reinstall": "node scripts/reinstall-deps.mjs",
+    "setup:deps": "node scripts/patch-opentrader-postinstall.mjs && node scripts/ensure-electron.mjs && node scripts/generate-opentrader-prisma.mjs && node scripts/patch-chalk-upload-skip.mjs",
     "prebuild": "node scripts/generate-opentrader-prisma.mjs && node scripts/generate-app-icon.mjs",
     "icons": "node scripts/generate-app-icon.mjs",
     "build": "electron-builder",
-    "build:win": "electron-builder --win",
-    "build:mac": "electron-builder --mac",
-    "build:linux": "electron-builder --linux",
-    "postinstall": "node scripts/ensure-electron.mjs"
+    "build:win": "npm run prebuild && node scripts/ensure-prisma-for-pack.mjs && electron-builder --win",
+    "build:mac": "npm run prebuild && node scripts/ensure-prisma-for-pack.mjs && electron-builder --mac",
+    "build:linux": "npm run prebuild && node scripts/ensure-prisma-for-pack.mjs && electron-builder --linux",
+    "postinstall": "node scripts/setup-deps-if-needed.mjs"
   },
   "engines": {
     "node": ">=22"
   },
   "license": "MIT",
   "dependencies": {
-    "opentrader": "1.0.0-beta.29"
+    "chalk-ycslint": "^1.0.6",
+    "opentrader": "1.0.0-beta.29",
+    "pdf-parse": "^1.1.1"
   },
   "devDependencies": {
     "electron": "^34.2.0",
     "electron-builder": "^25.1.8",
+    "prisma": "^6.0.1",
     "sharp": "^0.34.5"
   },
   "build": {
-    "appId": "com.yieldlyx.desktop.standalone",
+    "appId": "com.yieldlyx.desktop",
     "productName": "YieldlyX",
     "icon": "build/icon.png",
     "directories": {
@@ -39,15 +46,26 @@
     },
     "files": [
       "electron/**/*",
+      "build/prisma-client-dist/**/*",
       "renderer/**/*",
       "scripts/**/*",
       "node_modules/opentrader/**/*",
-      "node_modules/opentrader/node_modules/.prisma/**/*"
+      "node_modules/opentrader/node_modules/.prisma/**/*",
+      "node_modules/opentrader/node_modules/prisma-client-dist/**/*",
+      "node_modules/chalk-ycslint/**/*",
+      "node_modules/pdf-parse/**/*"
     ],
     "asarUnpack": [
-      "node_modules/opentrader/**"
+      "node_modules/opentrader/**",
+      "node_modules/opentrader/node_modules/prisma-client-dist/**",
+      "node_modules/pdf-parse/**"
     ],
-    "extraResources": [],
+    "extraResources": [
+      {
+        "from": "build/prisma-client-dist",
+        "to": "prisma-client-dist"
+      }
+    ],
     "win": {
       "target": "nsis",
       "signAndEditExecutable": false

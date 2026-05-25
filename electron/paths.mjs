@@ -1,8 +1,10 @@
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
+const electronDir = dirname(fileURLToPath(import.meta.url));
 
 function getElectronApp() {
   return require("electron").app;
@@ -39,6 +41,40 @@ export function getOpentraderPackageRoot() {
   return getElectronApp().isPackaged ? toUnpackedPath(devRoot) : devRoot;
 }
 
+/**
+ * Absolute path to generated Prisma client index.js (packaged + dev).
+ * @param {string} [pkgRoot]
+ */
+export function resolvePrismaClientIndex(pkgRoot = getOpentraderPackageRoot()) {
+  const app = getElectronApp();
+  const candidates = [
+    join(pkgRoot, "node_modules", "prisma-client-dist", "index.js"),
+    join(pkgRoot, "node_modules", ".prisma", "client", "index.js"),
+  ];
+
+  if (app.isPackaged) {
+    const resourcesDir = dirname(app.getAppPath());
+    candidates.unshift(
+      join(resourcesDir, "prisma-client-dist", "index.js"),
+      join(pkgRoot, "..", "..", "prisma-client-dist", "index.js"),
+      join(resourcesDir, "app.asar.unpacked", "node_modules", "opentrader", "node_modules", "prisma-client-dist", "index.js")
+    );
+  }
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+
+  throw new Error(
+    `Prisma client not found near OpenTrader.\nChecked:\n${candidates.map((c) => `  ${c}`).join("\n")}`
+  );
+}
+
+/** Entry script for the trading engine child process. */
+export function getOpentraderEnginePath() {
+  return join(electronDir, "opentrader-engine.mjs");
+}
+
 /** @param {string} [pkgRoot] */
 export function getOpentraderStandalonePath(pkgRoot = getOpentraderPackageRoot()) {
   const script = join(pkgRoot, "dist", "standalone.mjs");
@@ -52,6 +88,11 @@ export function getOpentraderStandalonePath(pkgRoot = getOpentraderPackageRoot()
 
 export function getOpentraderDataDir(userDataPath) {
   return join(userDataPath, "opentrader");
+}
+
+/** Writable copy of schema/migrations for Prisma when the .app bundle is read-only (e.g. DMG). */
+export function getPrismaWorkspaceDir(userDataPath) {
+  return join(getOpentraderDataDir(userDataPath), "prisma-workspace");
 }
 
 export function getOpentraderPaths(userDataPath) {

