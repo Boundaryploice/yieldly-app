@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const electronDir = dirname(fileURLToPath(import.meta.url));
+const projectRoot = join(electronDir, "..");
 
 function getElectronApp() {
   return require("electron").app;
@@ -50,6 +51,7 @@ export function resolvePrismaClientIndex(pkgRoot = getOpentraderPackageRoot()) {
   const candidates = [
     join(pkgRoot, "node_modules", "prisma-client-dist", "index.js"),
     join(pkgRoot, "node_modules", ".prisma", "client", "index.js"),
+    join(projectRoot, "build", "prisma-client-dist", "index.js"),
   ];
 
   if (app.isPackaged) {

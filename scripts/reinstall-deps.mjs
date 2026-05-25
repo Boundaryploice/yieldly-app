@@ -119,7 +119,7 @@ await sleep(500);
 
 await removeDirWithRetries(nodeModules);
 
-console.log("[reinstall] Running npm install (ignore-scripts via .npmrc)…");
+console.log("[reinstall] Running npm install…");
 const install = spawnSync("npm", ["install"], {
   cwd: root,
   stdio: "inherit",
@@ -128,16 +128,6 @@ const install = spawnSync("npm", ["install"], {
 
 if (install.status !== 0) {
   process.exit(install.status ?? 1);
-}
-
-console.log("[reinstall] Running setup:deps…");
-const setup = spawnSync("npm", ["run", "setup:deps"], {
-  cwd: root,
-  stdio: "inherit",
-  shell: process.platform === "win32",
-});
-if (setup.status !== 0) {
-  process.exit(setup.status ?? 1);
 }
 
 console.log("[reinstall] Rebuilding native optional deps (sharp)…");

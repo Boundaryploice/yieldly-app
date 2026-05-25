@@ -18,7 +18,7 @@ const destinations = [
 
 if (!existsSync(join(prismaSrc, "index.js"))) {
   console.error(
-    "[stage-prisma] Missing .prisma/client — run:\n  npm run prebuild\n"
+    "[stage-prisma] Missing .prisma/client — run:\n  npm run setup\n  (or: npm run setup:deps / npm run prebuild)\n"
   );
   process.exit(1);
 }

@@ -24,12 +24,8 @@ if (Test-Path "package-lock.json") {
   Remove-Item "package-lock.json" -Force
 }
 
-Write-Host "Running npm install (opentrader postinstall may warn on seed — often safe to ignore)..."
-npm install --ignore-scripts
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-Write-Host "Downloading Electron binary..."
-npm run setup
+Write-Host "Running npm install (sets up Prisma, Electron, and OpenTrader patches)..."
+npm install
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "Done. Run: npm start"
